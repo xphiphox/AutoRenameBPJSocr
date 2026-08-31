@@ -1,0 +1,771 @@
+<!DOCTYPE html>
+<html lang="id">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+
+<title>Punya KF21</title>
+
+<script src="https://unpkg.com/tesseract.js@5/dist/tesseract.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/FileSaver.js/2.0.5/FileSaver.min.js"></script>
+
+<style>
+
+body{
+    font-family:Arial, sans-serif;
+    max-width:1200px;
+    margin:auto;
+    padding:20px;
+    background:#f5f5f5;
+}
+
+h1{
+    text-align:center;
+}
+
+.card{
+    background:white;
+    padding:20px;
+    border-radius:10px;
+    box-shadow:0 2px 5px rgba(0,0,0,.15);
+}
+
+input[type=file]{
+    margin:10px 0;
+}
+
+button{
+    padding:10px 20px;
+    margin:5px;
+    border:none;
+    border-radius:6px;
+    cursor:pointer;
+}
+
+.btn-process{
+    background:#2196f3;
+    color:white;
+}
+
+.btn-zip{
+    background:#4caf50;
+    color:white;
+}
+
+.btn-csv{
+    background:#ff9800;
+    color:white;
+}
+
+.progress{
+    width:100%;
+    height:25px;
+    background:#ddd;
+    margin-top:15px;
+    border-radius:5px;
+    overflow:hidden;
+}
+
+.progress-bar{
+    height:100%;
+    width:0%;
+    background:#4caf50;
+    color:white;
+    text-align:center;
+    line-height:25px;
+}
+
+#status{
+    margin-top:10px;
+    font-weight:bold;
+}
+
+table{
+    width:100%;
+    border-collapse:collapse;
+    margin-top:20px;
+    background:white;
+}
+
+th,td{
+    border:1px solid #ccc;
+    padding:8px;
+    text-align:left;
+}
+
+th{
+    background:#f0f0f0;
+}
+
+.dup{
+    background:#ffdcdc;
+}
+
+.preview{
+    max-width:300px;
+    border:1px solid #ccc;
+    margin-top:10px;
+}
+
+</style>
+</head>
+
+<body>
+
+<div class="card">
+
+<h1>BPJS AUTO Rename</h1>
+<h2>By KF21 Malio</h2>
+
+<input
+    type="file"
+    id="files"
+    multiple
+    accept="image/*"
+>
+
+<br>
+
+<button
+    class="btn-process"
+    onclick="processFiles()"
+>
+Proses OCR
+</button>
+
+<button
+    class="btn-zip"
+    onclick="downloadZip()"
+>
+Download ZIP
+</button>
+
+<button
+    class="btn-csv"
+    onclick="downloadCSV()"
+>
+Download CSV
+</button>
+
+<div id="status">
+Menunggu file...
+</div>
+
+<div class="progress">
+    <div
+        id="bar"
+        class="progress-bar"
+    >
+    0%
+    </div>
+</div>
+
+<table>
+
+<thead>
+
+<tr>
+    <th>No</th>
+    <th>File Asli</th>
+    <th>Nama Pasien</th>
+    <th>File Baru</th>
+    <th>Duplikat</th>
+</tr>
+
+</thead>
+
+<tbody id="result">
+
+</tbody>
+
+</table>
+
+</div>
+
+<script>
+
+let zip = new JSZip();
+
+let results = [];
+
+function updateProgress(percent){
+
+    const bar =
+        document.getElementById("bar");
+
+    bar.style.width =
+        percent + "%";
+
+    bar.innerHTML =
+        Math.round(percent) + "%";
+}
+
+function getSequence(filename){
+
+    const match =
+        filename.match(/_(\d+)\./);
+
+    return match
+        ? match[1]
+        : "000";
+}
+
+/*
+Mencari nama pasien
+dari hasil OCR area kanan
+"NAMA PESERTA"
+*/
+
+function extractNameFromFullOCR(text){
+
+    const lines = text
+        .split(/\n+/)
+        .map(x => x.trim())
+        .filter(x => x);
+
+    // PRIORITAS 1
+    // Nama sebelum tanggal lahir
+
+    for(let i=1;i<lines.length;i++){
+
+        if(/\d{2}\/\d{2}\/\d{4}/.test(lines[i])){
+
+            let nama = lines[i-1]
+                .replace(/[^A-Za-z,\s]/g,' ')
+                .replace(/\s+/g,' ')
+                .trim()
+                .toUpperCase();
+
+            if(
+                nama.length >= 4 &&
+                !/(BPJS|APOTEK|KIMIA|FARMA|HYPERTENS|DIABETES|ASTHMA|STROKE)/i.test(nama)
+            ){
+                return nama;
+            }
+        }
+    }
+
+    // PRIORITAS 2
+    // Nama setelah nomor BPJS
+
+    for(let i=0;i<lines.length;i++){
+
+        if(/\d{10,16}/.test(lines[i])){
+
+            for(let j=i+1;j<=i+2;j++){
+
+                if(!lines[j]) continue;
+
+                let nama = lines[j]
+                    .replace(/[^A-Za-z,\s]/g,' ')
+                    .replace(/\s+/g,' ')
+                    .trim()
+                    .toUpperCase();
+
+                if(
+                    nama.length >= 4 &&
+                    !/(BPJS|APOTEK|KIMIA|FARMA|HYPERTENS|DIABETES|ASTHMA|STROKE)/i.test(nama)
+                ){
+                    return nama;
+                }
+            }
+        }
+    }
+
+    return "TIDAK_TERBACA";
+}
+
+/*
+OCR AREA NAMA PASIEN
+*/
+
+async function cropAndOCR(file){
+
+    return new Promise((resolve)=>{
+
+        const img =
+            new Image();
+
+        img.onload =
+        async ()=>{
+
+            const canvas =
+                document.createElement(
+                    "canvas"
+                );
+
+            const ctx =
+                canvas.getContext(
+                    "2d"
+                );
+
+            /*
+            ==================================================
+            AREA KHUSUS NAMA PASIEN
+            ==================================================
+
+            Berdasarkan contoh BPJS yang Anda kirim,
+            area ini berada di kanan tulisan
+            "Nama Peserta"
+
+            Jika hasil OCR kurang tepat,
+            ubah angka ini sedikit.
+            */
+
+            const sx =
+                img.width * 0.16;
+
+            const sy =
+                img.height * 0.201;
+
+            const sw =
+                img.width * 0.36;
+
+            const sh =
+                img.height * 0.18;
+
+            /*
+            Perbesar 4x
+            */
+
+            canvas.width =
+                sw * 4;
+
+            canvas.height =
+                sh * 4;
+
+            ctx.drawImage(
+                img,
+                sx,
+                sy,
+                sw,
+                sh,
+                0,
+                0,
+                canvas.width,
+                canvas.height
+            );
+
+            /*
+            Hitam putih
+            */
+
+            const imageData =
+                ctx.getImageData(
+                    0,
+                    0,
+                    canvas.width,
+                    canvas.height
+                );
+
+            const d =
+                imageData.data;
+
+            for(
+                let i=0;
+                i<d.length;
+                i+=4
+            ){
+
+                let avg =
+                    (
+                        d[i] +
+                        d[i+1] +
+                        d[i+2]
+                    ) / 3;
+
+                avg =
+                    avg > 170
+                    ? 255
+                    : 0;
+
+                d[i] =
+                    avg;
+
+                d[i+1] =
+                    avg;
+
+                d[i+2] =
+                    avg;
+            }
+
+            ctx.putImageData(
+                imageData,
+                0,
+                0
+            );
+
+            const result =
+                await Tesseract.recognize(
+                    canvas,
+                    "eng"
+                );
+
+            resolve(
+                result.data.text
+            );
+        };
+
+        img.src =
+            URL.createObjectURL(
+                file
+            );
+    });
+}
+
+async function processFiles(){
+
+    zip =
+        new JSZip();
+
+    results = [];
+
+    const tbody =
+        document.getElementById(
+            "result"
+        );
+
+    tbody.innerHTML = "";
+
+    const files =
+        Array.from(
+            document.getElementById(
+                "files"
+            ).files
+        );
+
+    if(
+        files.length === 0
+    ){
+
+        alert(
+            "Pilih file terlebih dahulu"
+        );
+
+        return;
+    }
+
+    const duplicateMap =
+        {};
+
+    for(
+        let i=0;
+        i<files.length;
+        i++
+    ){
+
+        document
+            .getElementById(
+                "status"
+            )
+            .innerHTML =
+            "Memproses "
+            + (i+1)
+            + " dari "
+            + files.length;
+
+        const file =
+            files[i];
+
+        const ocrText =
+            await cropAndOCR(
+                file
+            );
+
+console.log(ocrText);
+
+        const patient =
+            extractNameFromFullOCR(
+                ocrText
+            );
+
+        let sequence = parseInt(getSequence(file.name), 10) - 1;
+
+// supaya tetap 2 digit
+sequence = String(sequence).padStart(2, "0");
+
+const newName =
+    sequence +
+    "_" +
+    patient +
+    ".jpg";
+
+        duplicateMap[
+            patient
+        ] =
+        (
+            duplicateMap[
+                patient
+            ] || 0
+        ) + 1;
+
+        const duplicate =
+            duplicateMap[
+                patient
+            ] > 1;
+
+        zip.file(
+            newName,
+            file
+        );
+
+        results.push({
+
+            oldName:
+                file.name,
+
+            patient:
+                patient,
+
+            sequence:
+                sequence,
+
+            newName:
+                newName,
+
+            duplicate:
+                duplicate
+        });
+
+        const row =
+            document.createElement(
+                "tr"
+            );
+
+        if(
+            duplicate
+        ){
+
+            row.classList.add(
+                "dup"
+            );
+        }
+
+        row.innerHTML =
+
+        "<td>"
+        + (i+1)
+        + "</td>"
+
+        +
+
+        "<td>"
+        + file.name
+        + "</td>"
+
+        +
+
+        "<td>"
+        + patient
+        + "</td>"
+
+        +
+
+        "<td>"
+        + newName
+        + "</td>"
+
+        +
+
+        "<td>"
+        + (
+            duplicate
+            ? "YA"
+            : ""
+        )
+        + "</td>";
+
+        tbody.appendChild(
+            row
+        );
+
+        updateProgress(
+
+            (
+                (i+1)
+                /
+                files.length
+            )
+
+            * 100
+        );
+    }
+
+    document
+        .getElementById(
+            "status"
+        )
+        .innerHTML =
+
+        "Selesai. "
+        +
+
+        files.length
+
+        +
+
+        " file diproses.";
+}
+
+async function downloadZip(){
+
+    if(
+        results.length === 0
+    ){
+
+        alert(
+            "Belum ada hasil OCR"
+        );
+
+        return;
+    }
+
+    document
+        .getElementById(
+            "status"
+        )
+        .innerHTML =
+        "Membuat ZIP...";
+
+    const content =
+        await zip.generateAsync({
+
+            type:"blob",
+
+            compression:
+                "DEFLATE",
+
+            compressionOptions:{
+                level:6
+            }
+        });
+
+    saveAs(
+        content,
+        "BPJS_RENAME.zip"
+    );
+
+    document
+        .getElementById(
+            "status"
+        )
+        .innerHTML =
+        "ZIP berhasil dibuat";
+}
+
+function downloadCSV(){
+
+    if(
+        results.length === 0
+    ){
+
+        alert(
+            "Belum ada hasil OCR"
+        );
+
+        return;
+    }
+
+    let csv =
+
+        "No,"
+        +
+        "NamaPasien,"
+        +
+        "FileBaru,"
+        +
+        "Duplikat\n";
+
+    results.forEach(
+
+        (r,index)=>{
+
+            csv +=
+
+                (index+1)
+
+                + ","
+
+                + '"'
+                + r.patient
+                + '"'
+
+                + ","
+
+                + '"'
+                + r.newName
+                + '"'
+
+                + ","
+
+                + (
+                    r.duplicate
+                    ? "YA"
+                    : "TIDAK"
+                )
+
+                + "\n";
+        }
+    );
+
+    const blob =
+
+        new Blob(
+
+            [csv],
+
+            {
+                type:
+                "text/csv;charset=utf-8;"
+            }
+        );
+
+    saveAs(
+        blob,
+        "BPJS_RENAME.csv"
+    );
+}
+
+/*
+Reset progress
+saat memilih file baru
+*/
+
+document
+.getElementById(
+    "files"
+)
+.addEventListener(
+
+    "change",
+
+    ()=>{
+
+        updateProgress(
+            0
+        );
+
+        document
+        .getElementById(
+            "status"
+        )
+        .innerHTML =
+
+        document
+        .getElementById(
+            "files"
+        )
+        .files
+        .length
+
+        +
+
+        " file dipilih";
+    }
+);
+
+</script>
+
+</body>
+</html>
