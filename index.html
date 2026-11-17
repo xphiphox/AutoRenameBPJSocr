@@ -147,6 +147,23 @@ th{
     multiple
     accept="image/*"
 >
+<div style="margin:15px 0;padding:15px;background:#eef6ff;border-radius:8px;">
+
+    <h3>Urutan Nomor dari Awal ke Akhir</h3>
+
+    <label>Nomor awal:</label>
+    <input type="number" id="sequenceStart" value="1" min="1"
+    style="width:70px;padding:7px;">
+
+    <label>Nomor akhir:</label>
+    <input type="number" id="sequenceEnd" value="69" min="1"
+    style="width:70px;padding:7px;">
+
+    <p id="sequenceHint">
+        Kalo Gambar ada 10 pastikan urutan juga 10 ya fren. jangan misal ada 100 resep urutanya 201 sampai 320 kan berlebih.
+    </p>
+
+</div>
 
 <br>
 
@@ -487,12 +504,50 @@ async function processFiles(){
 
     tbody.innerHTML = "";
 
-    const files =
-        Array.from(
-            document.getElementById(
-                "files"
-            ).files
-        );
+    const files = Array.from(
+    document.getElementById("files").files
+);
+
+// Urutkan berdasarkan nomor asli file
+files.sort((a, b) => {
+    const nomorA = parseInt(getSequence(a.name), 10);
+    const nomorB = parseInt(getSequence(b.name), 10);
+
+    if (nomorA !== nomorB) {
+        return nomorA - nomorB;
+    }
+
+    return a.name.localeCompare(b.name, "id", {
+        numeric: true
+    });
+});
+
+// Ambil rentang nomor
+const mulai = parseInt(
+    document.getElementById("sequenceStart").value
+);
+
+const akhir = parseInt(
+    document.getElementById("sequenceEnd").value
+);
+
+// Validasi
+if (
+    !Number.isInteger(mulai) ||
+    !Number.isInteger(akhir) ||
+    mulai < 1 ||
+    akhir < mulai
+) {
+    alert("Nomor urutan tidak valid!");
+    return;
+}
+
+if (akhir - mulai + 1 !== files.length) {
+    alert(
+        "Gambare piro diurutke piro cuk cuk, Mikidskir"
+    );
+    return;
+}
 
     if(
         files.length === 0
@@ -539,10 +594,15 @@ console.log(ocrText);
                 ocrText
             );
 
-        let sequence = parseInt(getSequence(file.name), 10) - 1;
+        const sequenceStart = parseInt(
+    document.getElementById("sequenceStart").value
+);
 
-// supaya tetap 2 digit
-sequence = String(sequence).padStart(2, "0");
+const sequenceEnd = parseInt(
+    document.getElementById("sequenceEnd").value
+);
+
+let sequence = String(sequenceStart + i).padStart(2, "0");
 
 const newName =
     sequence +
