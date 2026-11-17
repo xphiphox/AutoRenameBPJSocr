@@ -107,6 +107,29 @@ th{
     border:1px solid #ccc;
     margin-top:10px;
 }
+/* Pengaturan kotak preview */
+.edit-preview-wrap {
+    width: 60%;
+    max-width: 500px;
+    overflow: auto;
+    border: 1px solid #bbb;
+    border-radius: 8px;
+    background: #222;
+    padding: 8px;
+    text-align: left;
+}
+
+/* Pengaturan gambar preview */
+#editPreview {
+    display: block;
+    width: 100%;
+    height: auto;
+    max-height: 72vh;
+    object-fit: contain;
+    transform: scale(3.0);
+    transform-origin: top left;
+    margin-left: 0;
+}
 
 </style>
 </head>
@@ -115,7 +138,7 @@ th{
 
 <div class="card">
 
-<h1>BPJS AUTO Rename</h1>
+<h1>BPJS AUTO Rename Biar Ga Pegel</h1>
 <h2>By KF21 Malio</h2>
 
 <input
@@ -148,6 +171,41 @@ Download ZIP
 Download CSV
 </button>
 
+<button
+    class="btn-edit"
+    id="editButton"
+    onclick="openManualEditor()"
+    disabled
+>
+Edit Semua File (0)
+</button>
+
+<div id="editPanel">
+    <h2>Perbaiki Nama Pasien dulu ya Fren</h2>
+    <p class="edit-hint">Sekarang setiap Filenya bisa diperiksa dan diedit manual, Yeiyyy.</p>
+    <div class="edit-nav">
+        <button type="button" onclick="moveEdit(-1)">Sebelumnya</button>
+        <span class="edit-count" id="editCounter">File 0 dari 0</span>
+        <button type="button" onclick="moveEdit(1)">Berikutnya</button>
+    </div>
+    <div class="edit-layout">
+        <div>
+            <div class="edit-preview-wrap">
+                <img id="editPreview" alt="Preview seluruh halaman dokumen">
+            </div>
+            <p class="edit-hint">Jangan Lupa Cek Ulang.</p>
+        </div>
+        <div class="edit-controls">
+            <div><strong>File asli:</strong> <span id="editOriginalName"></span></div>
+            <label for="manualName"><strong>Nama pasien yang benar</strong></label>
+            <input id="manualName" type="text" placeholder="Contoh: MOH SANAWI" autocomplete="off">
+            <button type="button" class="btn-edit" onclick="saveManualName()">Simpan Nama</button>
+            <button type="button" onclick="closeManualEditor()">Tutup Editor</button>
+            <p class="edit-hint">Nama akan otomatis dibuat menjadi HURUF KAPITAL bukan KAPITIL. Setelah selesai, klik Download ZIP ya Fren.</p>
+        </div>
+    </div>
+</div>
+
 <div id="status">
 Menunggu file...
 </div>
@@ -171,6 +229,7 @@ Menunggu file...
     <th>Nama Pasien</th>
     <th>File Baru</th>
     <th>Duplikat</th>
+    <th>Aksi</th>
 </tr>
 
 </thead>
@@ -505,15 +564,13 @@ const newName =
                 patient
             ] > 1;
 
-        zip.file(
-            newName,
-            file
-        );
-
         results.push({
 
             oldName:
                 file.name,
+
+            file:
+                file,
 
             patient:
                 patient,
@@ -574,11 +631,14 @@ const newName =
             ? "YA"
             : ""
         )
-        + "</td>";
+        + "</td>"
+        + '<td><button type="button" onclick="editResult(' + (results.length-1) + ')">Edit</button></td>';
 
         tbody.appendChild(
             row
         );
+
+        updateEditButton();
 
         updateProgress(
 
@@ -610,48 +670,156 @@ const newName =
 
 async function downloadZip(){
 
-    if(
-        results.length === 0
-    ){
-
-        alert(
-            "Belum ada hasil OCR"
-        );
-
+    if(results.length === 0){
+        alert("Belum ada hasil OCR");
         return;
     }
 
-    document
-        .getElementById(
-            "status"
-        )
-        .innerHTML =
-        "Membuat ZIP...";
+    const unresolved = results.filter(r => r.patient === "TIDAK_TERBACA").length;
+    if(unresolved > 0){
+        const lanjut = confirm("Masih ada " + unresolved + " file yang bernama TIDAK_TERBACA. Tetap download ZIP dengan nama TIDAK_TERBACA untuk file tersebut?");
+        if(!lanjut) {
+            openManualEditor();
+            return;
+        }
+    }
 
-    const content =
-        await zip.generateAsync({
+    document.getElementById("status").innerHTML = "Membuat ZIP...";
+    const finalZip = new JSZip();
 
-            type:"blob",
+    results.forEach(r => {
+        // Nama file dibuat ulang dari hasil OCR/manual edit terkini.
+        r.newName = r.sequence + "_" + r.patient + ".jpg";
+        finalZip.file(r.newName, r.file);
+    });
 
-            compression:
-                "DEFLATE",
+    const content = await finalZip.generateAsync({
+        type:"blob",
+        compression:"DEFLATE",
+        compressionOptions:{level:6}
+    });
 
-            compressionOptions:{
-                level:6
-            }
-        });
+    saveAs(content, "BPJS_RENAME.zip");
+    document.getElementById("status").innerHTML = "ZIP berhasil dibuat";
+}
 
-    saveAs(
-        content,
-        "BPJS_RENAME.zip"
-    );
+let editQueue = [];
+let editPosition = 0;
 
-    document
-        .getElementById(
-            "status"
-        )
-        .innerHTML =
-        "ZIP berhasil dibuat";
+function updateEditButton(){
+    const count = results.length;
+    const button = document.getElementById("editButton");
+    button.textContent = "Edit Semua File (" + count + ")";
+    button.disabled = count === 0;
+}
+
+function openManualEditor(){
+    editQueue = results.map((r, i) => i);
+    if(editQueue.length === 0){
+        alert("Belum ada hasil OCR untuk diedit.");
+        return;
+    }
+    editPosition = 0;
+    document.getElementById("editPanel").style.display = "block";
+    showEditItem();
+    document.getElementById("editPanel").scrollIntoView({behavior:"smooth", block:"start"});
+}
+
+function editResult(index){
+    editQueue = results.map((r, i) => i);
+    const position = editQueue.indexOf(index);
+    if(position < 0) return;
+    editPosition = position;
+    document.getElementById("editPanel").style.display = "block";
+    showEditItem();
+    document.getElementById("editPanel").scrollIntoView({behavior:"smooth", block:"start"});
+}
+
+function showEditItem(){
+    if(!editQueue.length) {
+        closeManualEditor();
+        return;
+    }
+    const resultIndex = editQueue[editPosition];
+    const item = results[resultIndex];
+    document.getElementById("editCounter").textContent =
+        "File " + (editPosition + 1) + " dari " + editQueue.length;
+    document.getElementById("editOriginalName").textContent = item.oldName;
+    document.getElementById("manualName").value = item.patient === "TIDAK_TERBACA" ? "" : item.patient;
+
+    const preview = document.getElementById("editPreview");
+    preview.onerror = function(){
+        preview.removeAttribute("src");
+        alert("Preview gambar tidak dapat dibuka: " + item.oldName);
+    };
+    // Tampilkan file gambar asli secara utuh; tidak di-crop dan tidak di-zoom.
+    preview.src = URL.createObjectURL(item.file);
+    document.getElementById("manualName").focus();
+}
+
+function saveManualName(){
+    if(!editQueue.length) return;
+    const name = document.getElementById("manualName").value
+        .trim()
+        .replace(/[^A-Za-z0-9, .'-]/g, " ")
+        .replace(/\s+/g, " ")
+        .toUpperCase();
+
+    if(name.length < 2){
+        alert("Masukkan nama pasien yang valid terlebih dahulu.");
+        return;
+    }
+
+    const resultIndex = editQueue[editPosition];
+    const item = results[resultIndex];
+    item.patient = name;
+    item.newName = item.sequence + "_" + name + ".jpg";
+
+    // Hapus item dari antrean karena sudah diperbaiki.
+    editQueue.splice(editPosition, 1);
+    refreshResultTable();
+    updateEditButton();
+
+    if(editQueue.length === 0){
+        alert("Hore Selesai");
+        closeManualEditor();
+        return;
+    }
+    if(editPosition >= editQueue.length) editPosition = editQueue.length - 1;
+    showEditItem();
+}
+
+function moveEdit(direction){
+    if(!editQueue.length) return;
+    // Simpan otomatis nama yang sedang diketik hanya jika tombol Simpan ditekan.
+    const next = editPosition + direction;
+    if(next < 0 || next >= editQueue.length) return;
+    editPosition = next;
+    showEditItem();
+}
+
+function closeManualEditor(){
+    document.getElementById("editPanel").style.display = "none";
+}
+
+function refreshResultTable(){
+    const tbody = document.getElementById("result");
+    tbody.innerHTML = "";
+    results.forEach((r, i) => {
+        const row = document.createElement("tr");
+        if(r.duplicate) row.classList.add("dup");
+        row.innerHTML =
+            "<td>" + (i+1) + "</td>" +
+            "<td></td>" +
+            "<td></td>" +
+            "<td></td>" +
+            "<td>" + (r.duplicate ? "YA" : "") + "</td>" +
+            '<td><button type="button" onclick="editResult(' + i + ')">Edit</button></td>';
+        row.children[1].textContent = r.oldName;
+        row.children[2].textContent = r.patient;
+        row.children[3].textContent = r.sequence + "_" + r.patient + ".jpg";
+        tbody.appendChild(row);
+    });
 }
 
 function downloadCSV(){
@@ -681,6 +849,7 @@ function downloadCSV(){
 
         (r,index)=>{
 
+            r.newName = r.sequence + "_" + r.patient + ".jpg";
             csv +=
 
                 (index+1)
@@ -745,6 +914,10 @@ document
         updateProgress(
             0
         );
+        results = [];
+        document.getElementById("result").innerHTML = "";
+        document.getElementById("editPanel").style.display = "none";
+        updateEditButton();
 
         document
         .getElementById(
